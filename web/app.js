@@ -201,7 +201,7 @@
   function tick() {
     if (busy || document.hidden) return;
     busy = true;
-    fetch('/api/state' + (showAll ? '?all=1' : ''), { cache: 'no-store' })
+    fetch('api/state' + (showAll ? '?all=1' : ''), { cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (s) { failures = 0; last = s; render(s); })
       .catch(function () {

@@ -47,6 +47,13 @@ halogen-ui --listen 0.0.0.0:8790 --log-cmd "docker logs -f -t --tail 3000 haloge
 Then open `http://<host>:8790`. A hardened systemd unit is in [`deploy/halogen-ui.service`](deploy/halogen-ui.service)
 (dynamic user, member of `systemd-journal` only).
 
+Behind a reverse proxy, any path prefix works (the page only uses relative URLs), for example with nginx:
+
+```nginx
+location = /halogen { return 301 /halogen/; }
+location /halogen/ { proxy_pass http://127.0.0.1:8790/; limit_except GET { deny all; } }
+```
+
 ## Options
 
 | Flag | Variable | Default |
