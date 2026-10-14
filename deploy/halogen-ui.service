@@ -1,0 +1,40 @@
+# systemd unit for halogen-ui running on the same machine as Halogen (installed as a systemd service, e.g. Quadlet).
+# Install: copy the binary to /usr/local/bin/halogen-ui, this file to /etc/systemd/system/, then
+#   systemctl daemon-reload && systemctl enable --now halogen-ui
+# For Halogen in Docker instead, set HUI_LOG_CMD to "docker logs -f -t --tail 3000 halogen" and add the dynamic user
+# to the docker group (SupplementaryGroups=docker) — or run it as a user that can read the container logs.
+[Unit]
+Description=halogen-ui — live web monitor for Halogen
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/halogen-ui
+Environment=HUI_LISTEN=0.0.0.0:8790
+Environment=HUI_HALOGEN=http://127.0.0.1:8731
+Environment="HUI_LOG_CMD=journalctl -u halogen.service -f -n 3000 -o short-unix"
+Environment=HUI_TITLE=Halogen
+# Halogen API key, if the server requires one:
+# EnvironmentFile=-/etc/halogen-ui.env      (HUI_HALOGEN_KEY=…, mode 600)
+Restart=always
+RestartSec=5
+
+DynamicUser=yes
+SupplementaryGroups=systemd-journal
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

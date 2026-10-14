@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>{{TITLE}} · Monitor</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true"></span><span id="title">{{TITLE}}</span><span class="tag">Monitor</span></div>
+  <div class="top-right">
+    <span class="pill" id="pill"><span class="dot"></span><span id="pill-txt">…</span></span>
+    <button class="icon-btn" id="theme" type="button" aria-label="Switch light / dark theme" title="Theme">◐</button>
+  </div>
+</header>
+
+<main>
+  <div class="banner" id="banner" hidden></div>
+
+  <section class="card state">
+    <div class="state-head">
+      <h2>Model state</h2>
+      <div class="chips" id="chips">
+        <span class="chip" data-p="idle">Idle</span>
+        <span class="chip" data-p="reading">Reading</span>
+        <span class="chip" data-p="generating">Generating</span>
+        <span class="chip" data-p="queued">Queued</span>
+        <span class="chip" data-p="down">Down</span>
+      </div>
+    </div>
+    <div class="state-row"><span id="state-txt">Connecting…</span><span class="muted" id="state-last"></span></div>
+    <div class="bar"><span id="state-bar"></span></div>
+  </section>
+
+  <section class="grid">
+    <article class="card tile">
+      <h3>Speed</h3>
+      <div class="pair">
+        <div><div class="big" id="dec">–</div><div class="sub">Decode, last request</div></div>
+        <div class="right"><div class="big" id="pre">–</div><div class="sub">Prefill, last request</div></div>
+      </div>
+      <canvas class="spark" id="c-speed" aria-label="Decode speed of recent requests"></canvas>
+    </article>
+    <article class="card tile">
+      <h3>GPU load</h3>
+      <div class="big" id="gpu">–</div><div class="sub" id="gpu-sub"></div>
+      <canvas class="spark" id="c-gpu" aria-label="GPU load"></canvas>
+    </article>
+    <article class="card tile">
+      <h3>GPU memory</h3>
+      <div class="big" id="gmem">–</div><div class="sub" id="gmem-sub"></div>
+      <canvas class="spark" id="c-gmem" aria-label="GPU memory"></canvas>
+    </article>
+    <article class="card tile">
+      <h3>GPU temp</h3>
+      <div class="big" id="temp">–</div><div class="sub" id="temp-sub"></div>
+      <canvas class="spark warm" id="c-temp" aria-label="GPU temperature"></canvas>
+    </article>
+    <article class="card tile">
+      <h3>Power</h3>
+      <div class="big" id="pow">–</div><div class="sub" id="pow-sub"></div>
+      <canvas class="spark" id="c-pow" aria-label="GPU power"></canvas>
+    </article>
+    <article class="card tile">
+      <h3>KV pool</h3>
+      <div class="big" id="pool">–</div><div class="sub" id="pool-sub"></div>
+      <canvas class="spark blue" id="c-pool" aria-label="KV pool fill"></canvas>
+    </article>
+    <article class="card tile">
+      <h3>CPU</h3>
+      <div class="big" id="cpu">–</div><div class="sub" id="cpu-sub"></div>
+      <canvas class="spark" id="c-cpu" aria-label="CPU load"></canvas>
+    </article>
+    <article class="card tile">
+      <h3>System RAM</h3>
+      <div class="big" id="ram">–</div><div class="sub" id="ram-sub"></div>
+      <canvas class="spark blue" id="c-ram" aria-label="System memory"></canvas>
+    </article>
+  </section>
+
+  <section class="lower">
+    <article class="card side">
+      <h2>Context</h2>
+      <div class="gauge">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="g-bg" cx="60" cy="60" r="48" pathLength="100"></circle>
+          <circle class="g-fg" id="g-arc" cx="60" cy="60" r="48" pathLength="100"></circle>
+        </svg>
+        <div class="g-txt"><div class="g-pct" id="g-pct">–</div><div class="sub" id="g-sub"></div></div>
+      </div>
+      <p class="sub center">last request (prompt + answer) against the model's window</p>
+      <dl class="stats">
+        <div><dt>Prompt cache hits</dt><dd id="s-cache">–</dd></div>
+        <div class="meter"><span id="m-cache"></span></div>
+        <div><dt>Prompt tokens reused</dt><dd id="s-reuse">–</dd></div>
+        <div class="meter"><span id="m-reuse"></span></div>
+        <div><dt>Draft tokens accepted</dt><dd id="s-draft">–</dd></div>
+        <div class="meter"><span id="m-draft"></span></div>
+        <div><dt>Average decode, since start</dt><dd id="s-adec">–</dd></div>
+        <div><dt>Average prefill, since start</dt><dd id="s-apre">–</dd></div>
+        <div><dt>Requests served</dt><dd id="s-req">–</dd></div>
+        <div><dt>Tokens generated</dt><dd id="s-gen">–</dd></div>
+        <div><dt>Cache on disk</dt><dd id="s-disk">–</dd></div>
+        <div><dt>Clients that hung up</dt><dd id="s-disc">–</dd></div>
+      </dl>
+    </article>
+
+    <article class="card table-card">
+      <div class="table-head">
+        <h2>Recent requests</h2>
+        <button type="button" class="btn" id="show-all">Show all</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Time</th><th class="n">Prompt</th><th class="n">Reused</th><th class="n">Output</th>
+            <th class="n">Prefill t/s</th><th class="n">Decode t/s</th><th class="n">Think</th><th class="n">Pool</th><th class="n">Duration</th>
+          </tr></thead>
+          <tbody id="rows"><tr><td colspan="9" class="muted">Waiting for data…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="summary sub" id="summary"></p>
+    </article>
+  </section>
+
+  <section class="card">
+    <div class="table-head">
+      <h2>Prompt cache</h2>
+      <span class="sub" id="pc-reused"></span>
+    </div>
+    <div class="two">
+      <div>
+        <div class="lbl"><strong>Cached conversations (RAM)</strong><span class="sub" id="pc-entries">–</span></div>
+        <div class="meter"><span id="pm-entries"></span></div>
+      </div>
+      <div>
+        <div class="lbl"><strong>On disk</strong><span class="sub" id="pc-disk">–</span></div>
+        <div class="meter"><span id="pm-disk"></span></div>
+      </div>
+    </div>
+    <dl class="kv">
+      <div><dt>Last request</dt><dd id="pc-last">–</dd></div>
+      <div><dt>Reused since start</dt><dd id="pc-saved">–</dd></div>
+      <div><dt>Hits / misses</dt><dd id="pc-hits">–</dd></div>
+      <div><dt>Stored / evicted</dt><dd id="pc-stores">–</dd></div>
+      <div><dt>Memory held</dt><dd id="pc-ram">–</dd></div>
+      <div><dt>Restore time</dt><dd id="pc-restore">–</dd></div>
+      <div><dt>Disk records</dt><dd id="pc-records">–</dd></div>
+      <div><dt>Disk hits / misses</dt><dd id="pc-dhits">–</dd></div>
+    </dl>
+    <p class="sub note">A request whose prompt starts like a cached conversation gets its state back instead of reading it again;
+      the oldest entry goes when the slots are full. Entries are also written to disk and survive a restart.</p>
+  </section>
+</main>
+
+<footer class="foot"><span id="foot"></span></footer>
+</body>
+</html>
