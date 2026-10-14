@@ -12,7 +12,8 @@ Wants=network-online.target
 ExecStart=/usr/local/bin/halogen-ui
 Environment=HUI_LISTEN=0.0.0.0:8790
 Environment=HUI_HALOGEN=http://127.0.0.1:8731
-Environment="HUI_LOG_CMD=journalctl -u halogen.service -f -n 3000 -o short-unix"
+# The whole log since Halogen started: full request history and the start time in the page.
+Environment="HUI_LOG_CMD=journalctl -u halogen.service -f -o short-unix --since \"$(systemctl show -p ActiveEnterTimestamp --value halogen.service)\""
 Environment=HUI_TITLE=Halogen
 # Halogen API key, if the server requires one:
 # EnvironmentFile=-/etc/halogen-ui.env      (HUI_HALOGEN_KEY=…, mode 600)

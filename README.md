@@ -38,7 +38,9 @@ Run it on the machine that runs Halogen, so it can read the GPU sensors:
 
 ```bash
 # Halogen as a systemd service (for example a Podman Quadlet):
-halogen-ui --listen 0.0.0.0:8790 --log-cmd "journalctl -u halogen.service -f -n 3000 -o short-unix"
+# (reading from Halogen's start gives the whole history and the "since" time)
+halogen-ui --listen 0.0.0.0:8790 \
+  --log-cmd 'journalctl -u halogen.service -f -o short-unix --since "$(systemctl show -p ActiveEnterTimestamp --value halogen.service)"'
 
 # Halogen in Docker or Podman (container named "halogen"):
 halogen-ui --listen 0.0.0.0:8790 --log-cmd "docker logs -f -t --tail 3000 halogen"
