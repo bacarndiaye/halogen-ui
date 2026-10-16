@@ -1,6 +1,6 @@
 [package]
 name = "halogen-ui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Live web monitor for a Halogen inference server: speed, context, prompt cache, GPU and recent requests"
 license = "MIT"

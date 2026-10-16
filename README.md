@@ -4,10 +4,12 @@ A live web monitor for a [Halogen](https://github.com/peonist-ai/halogen-flash-s
 request, prefill progress, context and KV pool, prompt cache, GPU load / memory / temperature / power, and the list of
 recent requests.
 
-One small static binary written in Rust, **no dependencies**, read-only. Unofficial: not affiliated with the Halogen
-authors.
+One small static binary written in Rust, **no dependencies**. The monitor is read-only; an optional [chat page](#chat)
+lets you talk to the model from the browser. Unofficial: not affiliated with the Halogen authors.
 
-![halogen-ui](docs/screenshot.png)
+| Monitor | Chat (`--chat`) |
+| --- | --- |
+| ![halogen-ui monitor](docs/screenshot.png) | ![halogen-ui chat](docs/screenshot-chat.jpg) |
 
 ## What it shows
 

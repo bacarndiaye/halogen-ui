@@ -38,7 +38,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .md pre .code-head button { background: none; border: 0; color: var(--muted); font: inherit; cursor: pointer; padding: 2px 8px; border-radius: 8px; }
 .md pre .code-head button:hover { background: var(--chip); color: var(--text); }
 .md pre code { display: block; background: none; padding: 12px 14px; overflow-x: auto; white-space: pre; border-radius: 0; }
-.md .tbl { overflow-x: auto; margin: 0 0 .9em; } .md table { font-size: 13px; } .md th { text-transform: none; letter-spacing: 0; font-size: 12px; } .md td { white-space: normal; }
+.md .tbl { overflow-x: auto; margin: 0 0 .9em; } .md table { font-size: 13px; } .md th { text-transform: none; letter-spacing: 0; font-size: 12px; } .md td { white-space: normal; } .md td:first-child { white-space: nowrap; }
 
 .think { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); font-size: 13px; }
 .think summary { cursor: pointer; padding: 8px 12px; color: var(--muted); font-weight: 600; list-style: none; }
