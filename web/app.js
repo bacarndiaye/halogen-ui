@@ -32,6 +32,21 @@
   function cssVar(n) { return getComputedStyle(root).getPropertyValue(n).trim(); }
   function setW(id, p) { $(id).style.width = Math.max(0, Math.min(100, p || 0)) + '%'; }
 
+  // Numbers glide to their new value instead of jumping: `draw(v)` is called on every frame with the value in between.
+  var still = window.matchMedia('(prefers-reduced-motion: reduce)').matches, glides = {};
+  function glide(id, target, draw) {
+    var g = glides[id] || (glides[id] = { v: null, raf: 0 });
+    cancelAnimationFrame(g.raf);
+    if (target == null || !isFinite(target) || g.v == null || still) { g.v = target == null || !isFinite(target) ? null : target; draw(g.v); return; }
+    var from = g.v, t0 = performance.now(), len = 450;
+    (function step(now) {
+      var k = Math.min(1, (now - t0) / len);
+      g.v = from + (target - from) * (1 - Math.pow(1 - k, 3));
+      draw(g.v);
+      if (k < 1) g.raf = requestAnimationFrame(step);
+    })(t0);
+  }
+
   function spark(id, values, max) {
     var c = $(id), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
     if (!w || !h) return;
@@ -53,7 +68,7 @@
 
   // ----------------------------------------------------------------- render --
   var PHASE = { idle: 'Idle', reading: 'Reading', generating: 'Generating', down: 'Down', unreachable: 'Unreachable' };
-  var last = null;
+  var last = null, prevRows = null;
 
   function render(s) {
     var st = s.status, ph = st.phase, m = s.metrics, h = s.host, r0 = s.requests[0];
@@ -76,7 +91,14 @@
       txt = 'Reading the prompt · ' + f0.format(st.done) + ' / ' + f0.format(st.total) + ' tokens · ' + f1.format(el) + ' s';
       setW('state-bar', pct(st.done, st.total));
     } else if (ph === 'generating') {
-      txt = 'Generating' + (st.busy_for ? ' · busy for ' + dur(st.busy_for) : '');
+      var lv = s.live, busyTxt = st.busy_for ? ' · busy for ' + dur(st.busy_for) : '';
+      if (lv && lv.tokens) {
+        // tokens counted live on the chat streams (Halogen itself only reports a request's tokens when it ends)
+        glide('live', lv.tokens, function (v) {
+          text('state-txt', 'Generating · ' + f0.format(v) + ' tokens' + (lv.tps ? ' · ' + f1.format(lv.tps) + ' tok/s' : '') + busyTxt + (st.queued ? ' · ' + f0.format(st.waiting) + ' waiting' : ''));
+        });
+        txt = null;
+      } else txt = 'Generating' + busyTxt;
       setW('state-bar', 100);
     } else if (ph === 'idle') {
       txt = 'Waiting for a request'; setW('state-bar', 0);
@@ -85,8 +107,9 @@
     } else {
       txt = 'Halogen does not answer'; setW('state-bar', 0);
     }
-    if (st.queued) txt += ' · ' + f0.format(st.waiting) + ' waiting';
-    text('state-txt', txt);
+    if (st.queued && txt != null) txt += ' · ' + f0.format(st.waiting) + ' waiting';
+    if (txt != null) text('state-txt', txt);
+    if (!(ph === 'generating' && s.live && s.live.tokens)) glide('live', null, function () { });
     text('state-last', r0 ? 'last: ' + f0.format(r0.output) + ' tokens at ' + f1.format(r0.decode_tps) + ' tok/s' : '');
 
     // banner: what is missing
@@ -107,39 +130,39 @@
     var sum = function (k) { var v = g.map(function (x) { return x[k]; }).filter(function (x) { return x != null; }); return v.length ? v.reduce(function (a, b) { return a + b; }, 0) : null; };
     var maxv = function (k) { var v = g.map(function (x) { return x[k]; }).filter(function (x) { return x != null; }); return v.length ? Math.max.apply(null, v) : null; };
     var per = function (k, fmt) { return g.length > 1 ? g.map(function (x) { return x.name + ' ' + fmt(x[k]); }).join(' · ') : ''; };
-    html('gpu', unit(avg('busy'), '%'));
+    glide('gpu', avg('busy'), function (v) { html('gpu', unit(v, '%')); });
     text('gpu-sub', g.length ? (per('busy', function (v) { return num(v) + '%'; }) || g[0].name + (g[0].clock ? ' · ' + f0.format(g[0].clock) + ' MHz' : '')) : 'no GPU sensor');
     spark('c-gpu', sm.map(function (x) { return x.gpu; }), 100);
     var mu = sum('mem_used'), mt = sum('mem_total');
-    html('gmem', mu == null ? '–' : f1.format(gib(mu)) + '<small>/ ' + f0.format(gib(mt)) + ' GB</small>');
+    glide('gmem', mu, function (v) { html('gmem', v == null ? '–' : f1.format(gib(v)) + '<small>/ ' + f0.format(gib(mt)) + ' GB</small>'); });
     text('gmem-sub', mu == null ? 'not exposed' : 'VRAM + GTT · ' + f0.format(pct(mu, mt)) + ' %');
     spark('c-gmem', sm.map(function (x) { return x.gpu_mem; }), mt || undefined);
-    html('temp', unit(maxv('temp'), '°C'));
+    glide('temp', maxv('temp'), function (v) { html('temp', unit(v, '°C')); });
     text('temp-sub', per('temp', function (v) { return num(v) + '°'; }) || (g.length ? 'edge sensor' : ''));
     spark('c-temp', sm.map(function (x) { return x.temp; }), 100);
     var pw = sum('power'), cap = sum('power_cap');
-    html('pow', unit(pw, 'W'));
+    glide('pow', pw, function (v) { html('pow', unit(v, 'W')); });
     text('pow-sub', cap ? 'of ' + f0.format(cap) + ' W limit' : g.length ? 'GPU package power' : '');
     spark('c-pow', sm.map(function (x) { return x.power; }));
 
     // KV pool
     var used = m.kv_cache_tokens, cap2 = m.kv_pool_positions;
-    html('pool', unit(m.kv_cache_usage_ratio != null ? 100 * m.kv_cache_usage_ratio : null, '%'));
+    glide('pool', m.kv_cache_usage_ratio != null ? 100 * m.kv_cache_usage_ratio : null, function (v) { html('pool', unit(v, '%')); });
     text('pool-sub', used != null && cap2 ? kfmt(used) + ' / ' + kfmt(cap2) + ' positions, all slots' : '');
     spark('c-pool', sm.map(function (x) { return x.pool; }), 100);
 
     // CPU / RAM
-    html('cpu', unit(h.cpu, '%'));
+    glide('cpu', h.cpu, function (v) { html('cpu', unit(v, '%')); });
     text('cpu-sub', h.threads ? h.threads + ' threads' : '');
     spark('c-cpu', sm.map(function (x) { return x.cpu; }), 100);
-    html('ram', h.mem_used == null ? '–' : f1.format(gib(h.mem_used)) + '<small>/ ' + f0.format(gib(h.mem_total)) + ' GB</small>');
+    glide('ram', h.mem_used, function (v) { html('ram', v == null ? '–' : f1.format(gib(v)) + '<small>/ ' + f0.format(gib(h.mem_total)) + ' GB</small>'); });
     text('ram-sub', h.mem_used == null ? '' : f0.format(pct(h.mem_used, h.mem_total)) + ' % used (weights are locked in RAM)');
     spark('c-ram', sm.map(function (x) { return x.mem; }), h.mem_total || undefined);
 
     // context gauge
     var ctx = s.model.context, lastCtx = r0 ? r0.prompt + r0.output : null, p = pct(lastCtx, ctx);
     $('g-arc').style.strokeDasharray = (p == null ? 0 : Math.min(100, p) * 0.75) + ' 100';
-    text('g-pct', p == null ? '–' : f0.format(p) + ' %');
+    glide('ctx', p, function (v) { text('g-pct', v == null ? '–' : f0.format(v) + ' %'); });
     text('g-sub', lastCtx == null ? '' : kfmt(lastCtx) + (ctx ? ' / ' + kfmt(ctx) : ''));
 
     // stats
@@ -168,7 +191,8 @@
         '</td><td class="n">' + (r.pool_used != null && r.pool_total ? f0.format(pct(r.pool_used, r.pool_total)) + ' %' : '–') +
         '</td><td class="n">' + dur(r.duration_s) + '</td></tr>';
     });
-    html('rows', rows.length ? rows.join('') : '<tr><td colspan="9" class="muted">No finished request in the log yet.</td></tr>');
+    var body = rows.length ? rows.join('') : '<tr><td colspan="9" class="muted">No finished request in the log yet.</td></tr>';
+    if (body !== prevRows) { html('rows', body); prevRows = body; }
     // summary since start
     var since = s.started ? 'Since ' + new Date(s.started * 1000).toLocaleString(loc, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'Since Halogen started';
     text('summary', m.requests_total == null ? '' : since + ': ' + f0.format(m.requests_total) + ' requests · ' +
@@ -198,12 +222,22 @@
       (s.model.name ? ' · ' + s.model.name : '') + ' · refreshed ' + clock(s.now));
   }
 
+  // The server sends only the graph points newer than the last one we have; the page keeps the history itself.
+  var hist = [], MAX_HIST = 600;
   function tick() {
     if (busy || document.hidden) return;
     busy = true;
-    fetch('api/state' + (showAll ? '?all=1' : ''), { cache: 'no-store' })
+    var q = [];
+    if (showAll) q.push('all=1');
+    if (hist.length) q.push('since=' + hist[hist.length - 1].t);
+    fetch('api/state' + (q.length ? '?' + q.join('&') : ''), { cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function (s) { failures = 0; last = s; render(s); })
+      .then(function (s) {
+        failures = 0;
+        hist = hist.concat(s.samples).slice(-MAX_HIST);
+        s.samples = hist;
+        last = s; render(s);
+      })
       .catch(function () {
         failures++;
         if (failures > 1) { $('banner').hidden = false; text('banner', 'The monitor itself does not answer (' + failures + ' tries).'); }
@@ -213,5 +247,5 @@
   window.addEventListener('resize', function () { if (last) render(last); });
   document.addEventListener('visibilitychange', tick);
   tick();
-  setInterval(tick, 2000);
+  setInterval(tick, 500);
 })();

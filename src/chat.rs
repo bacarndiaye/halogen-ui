@@ -6,9 +6,9 @@ use super::{Config, connect, json, response_head};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Largest chat request accepted (images travel as base64 inside it).
 const MAX_BODY: usize = 48 << 20;
@@ -299,6 +299,13 @@ pub fn handle(mut client: TcpStream, cfg: &Config, head: &Head) {
     {
         return;
     }
+    // Count the tokens as they go by, for the monitor's live counter (the frames are not framed by chunks when the
+    // answer is a plain close-delimited stream, which is what Halogen sends).
+    let live = Live::start();
+    let mut counter = (!extra.contains("chunked")).then(Counter::default);
+    if let Some(c) = counter.as_mut() {
+        live.add(c.feed(&buf[end + 4..]));
+    }
     if client.write_all(&buf[end + 4..]).is_err() {
         return;
     }
@@ -306,6 +313,9 @@ pub fn handle(mut client: TcpStream, cfg: &Config, head: &Head) {
         match up.read(&mut chunk) {
             Ok(0) | Err(_) => break,
             Ok(k) => {
+                if let Some(c) = counter.as_mut() {
+                    live.add(c.feed(&chunk[..k]));
+                }
                 if client.write_all(&chunk[..k]).is_err() {
                     break;
                 }
@@ -314,4 +324,132 @@ pub fn handle(mut client: TcpStream, cfg: &Config, head: &Head) {
     }
     let _ = up.shutdown(Shutdown::Both);
     let _ = client.shutdown(Shutdown::Both);
+}
+
+// ----------------------------------------------------------------------------------------------- live token count --
+
+/// One chat stream being relayed: when its first token came, and how many tokens went by.
+struct Running {
+    id: u64,
+    first: Option<Instant>,
+    tokens: u64,
+}
+
+static RUNNING: Mutex<Vec<Running>> = Mutex::new(Vec::new());
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Registers a running stream for as long as it lives.
+struct Live(u64);
+
+impl Live {
+    fn start() -> Live {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut r) = RUNNING.lock() {
+            r.push(Running {
+                id,
+                first: None,
+                tokens: 0,
+            });
+        }
+        Live(id)
+    }
+
+    fn add(&self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        if let Ok(mut r) = RUNNING.lock()
+            && let Some(x) = r.iter_mut().find(|x| x.id == self.0)
+        {
+            x.first.get_or_insert_with(Instant::now);
+            x.tokens += n;
+        }
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        if let Ok(mut r) = RUNNING.lock() {
+            r.retain(|x| x.id != self.0);
+        }
+    }
+}
+
+/// What the monitor shows while chat streams run: `(streams, tokens so far, seconds since the first token, tokens/s)`.
+/// `None` when no chat stream has produced a token yet.
+pub fn live() -> Option<(usize, u64, f64, f64)> {
+    let r = RUNNING.lock().ok()?;
+    let now = Instant::now();
+    let (mut tokens, mut secs, mut tps, mut n) = (0, 0.0f64, 0.0, 0);
+    for x in r.iter() {
+        let Some(first) = x.first else { continue };
+        let s = now.duration_since(first).as_secs_f64();
+        tokens += x.tokens;
+        secs = secs.max(s);
+        // tokens counted after the first one, over the time since it: the first token itself took no decode time
+        if s > 0.05 {
+            tps += x.tokens.saturating_sub(1) as f64 / s;
+        }
+        n += 1;
+    }
+    (n > 0).then_some((n, tokens, secs, tps))
+}
+
+/// Splits a server-sent-event stream into frames and counts those that carry text.
+#[derive(Default)]
+struct Counter(Vec<u8>);
+
+impl Counter {
+    fn feed(&mut self, bytes: &[u8]) -> u64 {
+        self.0.extend_from_slice(bytes);
+        let (mut n, mut at) = (0, 0);
+        while let Some(i) = self.0[at..].windows(2).position(|w| w == b"\n\n") {
+            if carries_text(&self.0[at..at + i]) {
+                n += 1;
+            }
+            at += i + 2;
+        }
+        self.0.drain(..at);
+        if self.0.len() > 1 << 20 {
+            self.0.clear();
+        }
+        n
+    }
+}
+
+/// A frame whose delta has a non-empty `content` or `reasoning_content` string (Halogen sends one token per frame).
+fn carries_text(frame: &[u8]) -> bool {
+    [&b"\"content\":"[..], b"\"reasoning_content\":", b"\"reasoning\":"]
+        .iter()
+        .any(|key| {
+            frame.windows(key.len()).enumerate().any(|(i, w)| {
+                if w != *key {
+                    return false;
+                }
+                let mut rest = frame[i + key.len()..].iter().skip_while(|b| **b == b' ');
+                rest.next() == Some(&b'"') && rest.next().is_some_and(|b| *b != b'"')
+            })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counts_text_frames_only() {
+        let mut c = Counter::default();
+        let a = b"data: {\"choices\": [{\"delta\": {\"role\": \"assistant\", \"content\": \"\"}}]}\n\ndata: {\"choices\": [{\"delta\": {\"content\": \"Hel";
+        assert_eq!(c.feed(a), 0);
+        let b = b"lo\"}}]}\n\ndata: {\"choices\": [{\"delta\": {\"reasoning_content\": \" ok\"}}]}\n\n: keepalive\n\ndata: [DONE]\n\n";
+        assert_eq!(c.feed(b), 2);
+        assert_eq!(c.feed(b"data: {\"usage\": {\"completion_tokens\": 2}}\n\n"), 0);
+    }
+
+    #[test]
+    fn compact_json_too() {
+        assert!(carries_text(b"data: {\"delta\":{\"content\":\"x\"}}"));
+        assert!(!carries_text(b"data: {\"delta\":{\"content\":null}}"));
+        assert!(!carries_text(b"data: {\"delta\":{\"tool_calls\":[]}}"));
+    }
 }

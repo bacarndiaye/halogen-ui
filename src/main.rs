@@ -404,21 +404,20 @@ fn json_flat(text: &str) -> HashMap<String, String> {
 
 fn sampler(cfg: &Config, st: &Shared) {
     let mut sensors = Sensors::detect();
+    // The host sensors are read every half second; Halogen is asked less often (each request shows in its log):
+    // /metrics every second, /cache every 3 s, /health every 10 s. The history behind the graphs gets a point per second.
     let mut n = 0u64;
     loop {
         let host = sensors.read();
-        let metrics = http_get(cfg, "/metrics");
-        let cache = http_get(cfg, "/cache").ok();
-        let health = if n.is_multiple_of(5) {
-            http_get(cfg, "/health").ok()
-        } else {
-            None
-        };
+        let second = n.is_multiple_of(2);
+        let metrics = second.then(|| http_get(cfg, "/metrics"));
+        let cache = n.is_multiple_of(6).then(|| http_get(cfg, "/cache").ok());
+        let health = n.is_multiple_of(20).then(|| http_get(cfg, "/health").ok()).flatten();
         n += 1;
         let t = now();
         let mut s = st.lock().unwrap();
         match metrics {
-            Ok(text) => {
+            Some(Ok(text)) => {
                 let (m, b) = parse::parse_metrics(&text);
                 s.metrics = m;
                 if !b.is_empty() {
@@ -427,15 +426,18 @@ fn sampler(cfg: &Config, st: &Shared) {
                 s.metrics_ok = true;
                 s.metrics_err.clear();
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 s.metrics_ok = false;
                 s.metrics_err = e;
             }
+            None => {}
         }
         if let Some(h) = health {
             s.health = json_flat(&h);
         }
-        s.cache = cache.map(|c| json_flat(&c)).unwrap_or_default();
+        if let Some(c) = cache {
+            s.cache = c.map(|c| json_flat(&c)).unwrap_or_default();
+        }
         let avg = |v: Vec<f64>| (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64);
         let sample = Sample {
             t,
@@ -453,13 +455,15 @@ fn sampler(cfg: &Config, st: &Shared) {
             },
             pool: s.metrics.get("llamacpp:kv_cache_usage_ratio").map(|x| x * 100.0),
         };
-        s.samples.push_back(sample);
-        while s.samples.len() > 300 {
-            s.samples.pop_front();
+        if second {
+            s.samples.push_back(sample);
+            while s.samples.len() > 600 {
+                s.samples.pop_front();
+            }
         }
         s.host = host;
         drop(s);
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_millis(500));
     }
 }
 
@@ -488,7 +492,8 @@ fn req_json(r: &Request) -> String {
     o.end()
 }
 
-fn state_json(cfg: &Config, st: &Shared, all: bool) -> String {
+/// The page's state. With `since`, only the graph points newer than that time are sent (the page keeps the rest).
+fn state_json(cfg: &Config, st: &Shared, all: bool, since: Option<f64>) -> String {
     let s = st.lock().unwrap();
     let t = now();
     let m = |k: &str| s.metrics.get(k).copied();
@@ -594,6 +599,7 @@ fn state_json(cfg: &Config, st: &Shared, all: bool) -> String {
     let samples: Vec<String> = s
         .samples
         .iter()
+        .filter(|x| since.is_none_or(|t| x.t > t))
         .map(|x| {
             let mut o = Obj::new();
             o.num("t", x.t)
@@ -663,6 +669,7 @@ fn state_json(cfg: &Config, st: &Shared, all: bool) -> String {
         .raw("metrics", &metrics.end())
         .raw("host", &host.end())
         .raw("samples", &json::array(&samples))
+        .raw("live", &live_json())
         .raw("requests", &json::array(&reqs))
         .raw("cache", &cache.end())
         .int("requests_kept", s.reqs.len() as u64)
@@ -675,6 +682,22 @@ fn state_json(cfg: &Config, st: &Shared, all: bool) -> String {
         .bool("metrics_ok", s.metrics_ok)
         .str("metrics_error", &s.metrics_err);
     o.end()
+}
+
+/// Tokens produced so far by the chat streams running through this server (`null` when there are none): the only
+/// live count there is, since Halogen itself reports a request's tokens when it ends.
+fn live_json() -> String {
+    match chat::live() {
+        Some((streams, tokens, secs, tps)) => {
+            let mut o = Obj::new();
+            o.int("streams", streams as u64)
+                .int("tokens", tokens)
+                .num("secs", secs)
+                .num("tps", tps);
+            o.end()
+        }
+        None => "null".to_string(),
+    }
 }
 
 // ------------------------------------------------------------------------------------------------- HTTP server --
@@ -776,11 +799,15 @@ fn handle(mut stream: TcpStream, cfg: &Config, st: &Shared) {
         "/favicon.svg" => respond(&mut stream, "200 OK", "image/svg+xml", FAVICON.as_bytes(), true),
         "/api/state" => {
             let all = query.split('&').any(|kv| kv == "all=1");
+            let since = query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("since="))
+                .and_then(|v| v.parse::<f64>().ok());
             respond(
                 &mut stream,
                 "200 OK",
                 "application/json",
-                state_json(cfg, st, all).as_bytes(),
+                state_json(cfg, st, all, since).as_bytes(),
                 false,
             )
         }

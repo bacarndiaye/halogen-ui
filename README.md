@@ -24,6 +24,11 @@ lets you talk to the model from the browser. Unofficial: not affiliated with the
 | Prompt cache: cached conversations, disk cache, reuse, hits / misses, evictions, restore time | `/cache` |
 | Totals since Halogen started: requests, tokens read and reused, tokens written, average speeds | `/metrics` |
 
+The page refreshes twice a second and values glide to their new reading: host sensors are read every 500 ms,
+Halogen's `/metrics` every second (the graphs get a point per second, 10 minutes kept in the browser). Halogen only
+reports a request's token count when the request ends, so the **live token counter** ("Generating · 412 tokens · 52
+tok/s") covers the requests that go through the [chat](#chat); other clients show the busy time until their request ends.
+
 No prompt or answer text is ever read: Halogen's log only carries counts. The page can be shared publicly.
 
 ## Install
@@ -80,7 +85,7 @@ Halogen has no interface of its own. With `--chat` (or `HUI_CHAT=1`), halogen-ui
 (a "Chat" button appears in the monitor header):
 
 - streamed answers with Markdown (tables, code blocks with a copy button, lists), the model's thinking in a collapsible
-  block, and tokens/s for each answer;
+  block, and a live tokens / tokens-per-second counter while the answer is written (Halogen sends one token per event);
 - attach images (sent to Halogen's vision input, downscaled to 1920 px) and text files; paste or drop them too;
 - stop, regenerate, copy, new chat, download the conversation as Markdown;
 - settings: system prompt, thinking level (off / low / medium / high / max), temperature, max answer tokens.

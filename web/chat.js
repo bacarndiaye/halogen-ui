@@ -219,7 +219,7 @@
       ui.think.hidden = false;
       ui.thinkBody.textContent = m.reasoning;
       ui.think.classList.toggle('live', live && !m.content);
-      ui.thinkSum.textContent = live && !m.content ? 'Thinking' : 'Thought' + (m.thinkSecs ? ' for ' + m.thinkSecs.toFixed(0) + ' s' : '');
+      ui.thinkSum.textContent = live && !m.content ? 'Thinking' + (ui.rn ? ' · ' + ui.rn + ' tokens' : '') : 'Thought' + (m.thinkSecs ? ' for ' + m.thinkSecs.toFixed(0) + ' s' : '');
       if (live && !m.content) { ui.think.open = true; ui.thinkBody.scrollTop = ui.thinkBody.scrollHeight; }
     }
     ui.body.textContent = '';
@@ -227,6 +227,14 @@
     else if (live && !m.reasoning) ui.body.appendChild(el('span', 'waiting', 'Waiting for the model…'));
     ui.body.classList.toggle('caret', live && !!m.content);
     toBottom();
+  }
+  // The footer while an answer is coming: waiting time, then tokens so far and speed, several times a second.
+  function liveStat(ui) {
+    var now = performance.now();
+    if (!ui.tFirst) { ui.foot.textContent = 'Waiting · ' + ((now - ui.t0) / 1000).toFixed(1) + ' s'; return; }
+    var s = (now - ui.tFirst) / 1000;
+    ui.foot.textContent = ui.n + ' tokens' + (s > 0.3 ? ' · ' + (Math.max(0, ui.n - 1) / s).toFixed(1) + ' tok/s' : '') + ' · ' + ((now - ui.t0) / 1000).toFixed(1) + ' s';
+    if (ui.rn && !ui.m.content) ui.thinkSum.textContent = 'Thinking · ' + ui.rn + ' tokens';
   }
   function footer(ui, last) {
     var m = ui.m;
@@ -304,6 +312,10 @@
     setBusy(true);
     ctrl = new AbortController();
     var t0 = performance.now(), tFirst = null, tThinkEnd = null, usage = null, finish = null, raf = 0;
+    // Halogen sends one token per event, so counting events gives the live count (the exact total comes at the end).
+    ui.n = 0; ui.rn = 0; ui.t0 = t0; ui.tFirst = null;
+    var timer = setInterval(function () { liveStat(ui); }, 100);
+    liveStat(ui);
     var schedule = function () { if (!raf) raf = requestAnimationFrame(function () { raf = 0; paint(ui, true); }); };
 
     function onEvent(d) {
@@ -314,9 +326,10 @@
       if (c.finish_reason) finish = c.finish_reason;
       var dl = c.delta || {};
       var r = dl.reasoning_content || dl.reasoning;
-      if (r) { if (tFirst == null) tFirst = performance.now(); m.reasoning += r; }
+      if (r) { if (tFirst == null) ui.tFirst = tFirst = performance.now(); m.reasoning += r; ui.n++; ui.rn++; }
       if (dl.content) {
-        if (tFirst == null) tFirst = performance.now();
+        if (tFirst == null) ui.tFirst = tFirst = performance.now();
+        ui.n++;
         if (tThinkEnd == null && m.reasoning) { tThinkEnd = performance.now(); m.thinkSecs = (tThinkEnd - t0) / 1000; }
         m.content += dl.content;
       }
@@ -364,6 +377,7 @@
       notice('Could not get an answer. ' + (e.message || e));
     }).then(function () {
       if (raf) cancelAnimationFrame(raf);
+      clearInterval(timer);
       ctrl = null;
       var t1 = performance.now();
       if (m.content || m.reasoning) {
