@@ -17,6 +17,8 @@ Environment="HUI_LOG_CMD=journalctl -u halogen.service -f -o short-unix --since 
 Environment=HUI_TITLE=Halogen
 # Uncomment to also serve the chat page (/chat): anyone who can open the page can then use the model.
 #Environment=HUI_CHAT=1
+# Transparent proxy to Halogen on loopback: point your reverse proxy at it (with Halogen as backup) for live token counts.
+#Environment=HUI_PROXY_LISTEN=127.0.0.1:18732
 # Password of the chat (put it in the EnvironmentFile below rather than here):
 #   HUI_CHAT_TOKEN=…
 # Halogen API key, if the server requires one:

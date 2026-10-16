@@ -339,10 +339,10 @@ static RUNNING: Mutex<Vec<Running>> = Mutex::new(Vec::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Registers a running stream for as long as it lives.
-struct Live(u64);
+pub struct Live(u64);
 
 impl Live {
-    fn start() -> Live {
+    pub fn start() -> Live {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut r) = RUNNING.lock() {
             r.push(Running {
@@ -354,7 +354,7 @@ impl Live {
         Live(id)
     }
 
-    fn add(&self, n: u64) {
+    pub fn add(&self, n: u64) {
         if n == 0 {
             return;
         }
@@ -397,10 +397,10 @@ pub fn live() -> Option<(usize, u64, f64, f64)> {
 
 /// Splits a server-sent-event stream into frames and counts those that carry text.
 #[derive(Default)]
-struct Counter(Vec<u8>);
+pub struct Counter(Vec<u8>);
 
 impl Counter {
-    fn feed(&mut self, bytes: &[u8]) -> u64 {
+    pub fn feed(&mut self, bytes: &[u8]) -> u64 {
         self.0.extend_from_slice(bytes);
         let (mut n, mut at) = (0, 0);
         while let Some(i) = self.0[at..].windows(2).position(|w| w == b"\n\n") {
@@ -419,17 +419,32 @@ impl Counter {
 
 /// A frame whose delta has a non-empty `content` or `reasoning_content` string (Halogen sends one token per frame).
 fn carries_text(frame: &[u8]) -> bool {
-    [&b"\"content\":"[..], b"\"reasoning_content\":", b"\"reasoning\":"]
-        .iter()
-        .any(|key| {
-            frame.windows(key.len()).enumerate().any(|(i, w)| {
-                if w != *key {
-                    return false;
-                }
-                let mut rest = frame[i + key.len()..].iter().skip_while(|b| **b == b' ');
-                rest.next() == Some(&b'"') && rest.next().is_some_and(|b| *b != b'"')
-            })
+    // Only server-sent events count (so a plain JSON answer never does), whatever the API flavour: chat completions
+    // (`content`, `reasoning_content`), completions (`text`), Anthropic messages (`text`, `thinking`, `partial_json`),
+    // responses (`delta` as a string), and tool-call arguments.
+    if !frame.windows(5).any(|w| w == b"data:") {
+        return false;
+    }
+    [
+        &b"\"content\":"[..],
+        b"\"reasoning_content\":",
+        b"\"reasoning\":",
+        b"\"text\":",
+        b"\"thinking\":",
+        b"\"partial_json\":",
+        b"\"arguments\":",
+        b"\"delta\":",
+    ]
+    .iter()
+    .any(|key| {
+        frame.windows(key.len()).enumerate().any(|(i, w)| {
+            if w != *key {
+                return false;
+            }
+            let mut rest = frame[i + key.len()..].iter().skip_while(|b| **b == b' ');
+            rest.next() == Some(&b'"') && rest.next().is_some_and(|b| *b != b'"')
         })
+    })
 }
 
 #[cfg(test)]
@@ -444,6 +459,19 @@ mod tests {
         let b = b"lo\"}}]}\n\ndata: {\"choices\": [{\"delta\": {\"reasoning_content\": \" ok\"}}]}\n\n: keepalive\n\ndata: [DONE]\n\n";
         assert_eq!(c.feed(b), 2);
         assert_eq!(c.feed(b"data: {\"usage\": {\"completion_tokens\": 2}}\n\n"), 0);
+    }
+
+    #[test]
+    fn other_api_flavours() {
+        // Anthropic messages, OpenAI responses, completions; chunked framing in front of a frame is harmless
+        let mut c = Counter::default();
+        let s = b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n\
+                  3a\r\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n\
+                  event: content_block_start\ndata: {\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+                  data: {\"choices\":[{\"text\":\"a\"}]}\n\n";
+        assert_eq!(c.feed(s), 3);
+        // a plain JSON answer is not an event stream
+        assert_eq!(c.feed(b"{\"choices\":[{\"message\":{\"content\":\"hello\"}}]}\n\n"), 0);
     }
 
     #[test]

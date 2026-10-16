@@ -15,6 +15,7 @@
 mod chat;
 mod json;
 mod parse;
+mod proxy;
 mod sensors;
 
 use json::Obj;
@@ -49,6 +50,8 @@ USAGE: halogen-ui [options]
   --keep N            finished requests kept in memory (HUI_KEEP, default 500)
   --chat              also serve a chat page (/chat) that talks to the model (HUI_CHAT=1). Off by default: the monitor
                       is read-only, the chat lets anyone who can open the page use the model
+  --proxy-listen ADDR transparent proxy to Halogen on this loopback address (HUI_PROXY_LISTEN, e.g. 127.0.0.1:18732):
+                      point your reverse proxy at it instead of Halogen and the live token counter covers every client
   -h, --help          this help
 
 The Halogen API key, if the server requires one, is read from HUI_HALOGEN_KEY (never from the command line).
@@ -67,6 +70,8 @@ struct Config {
     chat: bool,
     /// Password of the chat, if any (HUI_CHAT_TOKEN, never on the command line).
     chat_token: Option<String>,
+    /// Loopback address of the transparent proxy to Halogen, if enabled.
+    proxy_listen: Option<String>,
 }
 
 fn config() -> Config {
@@ -85,6 +90,7 @@ fn config() -> Config {
         keep: env("HUI_KEEP", "500").parse().unwrap_or(500),
         chat: matches!(env("HUI_CHAT", "").as_str(), "1" | "true" | "yes" | "on"),
         chat_token: std::env::var("HUI_CHAT_TOKEN").ok().filter(|v| !v.is_empty()),
+        proxy_listen: std::env::var("HUI_PROXY_LISTEN").ok().filter(|v| !v.is_empty()),
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -101,6 +107,7 @@ fn config() -> Config {
             "--title" => c.title = val("--title"),
             "--keep" => c.keep = val("--keep").parse().unwrap_or(500),
             "--chat" => c.chat = true,
+            "--proxy-listen" => c.proxy_listen = Some(val("--proxy-listen")),
             "-V" | "--version" => {
                 println!("halogen-ui {VERSION}");
                 std::process::exit(0)
@@ -830,6 +837,14 @@ fn main() {
     {
         let (c, s) = (cfg.clone(), st.clone());
         thread::spawn(move || sampler(&c, &s));
+    }
+    if let Some(addr) = cfg.proxy_listen.clone() {
+        let c = cfg.clone();
+        thread::spawn(move || proxy::serve(&addr, c));
+        eprintln!(
+            "halogen-ui: proxy to Halogen on {}",
+            cfg.proxy_listen.as_deref().unwrap_or("")
+        );
     }
     eprintln!(
         "halogen-ui {VERSION}: http://{}  (Halogen {}, log: {})",

@@ -27,7 +27,8 @@ lets you talk to the model from the browser. Unofficial: not affiliated with the
 The page refreshes twice a second and values glide to their new reading: host sensors are read every 500 ms,
 Halogen's `/metrics` every second (the graphs get a point per second, 10 minutes kept in the browser). Halogen only
 reports a request's token count when the request ends, so the **live token counter** ("Generating · 412 tokens · 52
-tok/s") covers the requests that go through the [chat](#chat); other clients show the busy time until their request ends.
+tok/s") covers the requests that go through the [chat](#chat), and through the [proxy](#live-tokens-for-every-client) if you
+set it up; without it, other clients show the busy time until their request ends.
 
 No prompt or answer text is ever read: Halogen's log only carries counts. The page can be shared publicly.
 
@@ -75,6 +76,7 @@ location /halogen/ { proxy_pass http://127.0.0.1:8790/; limit_except GET { deny 
 | `--chat` | `HUI_CHAT=1` | off: also serve the chat page, see [Chat](#chat) |
 | | `HUI_HALOGEN_KEY` | API key, if Halogen requires one (never on the command line) |
 | | `HUI_CHAT_TOKEN` | password of the chat (never on the command line), see [Chat](#chat) |
+| `--proxy-listen ADDR` | `HUI_PROXY_LISTEN` | off: transparent proxy to Halogen, see [below](#live-tokens-for-every-client) |
 
 The log command should print timestamps (`-o short-unix` for journalctl, `-t` for docker / podman); without them, the
 backlog is stamped with the time it was read.
@@ -105,6 +107,26 @@ through for `/api/chat` only, with buffering off so the answer streams:
 ```nginx
 location = /halogen/api/chat { proxy_pass http://127.0.0.1:8790/api/chat; proxy_buffering off; proxy_read_timeout 3700s; }
 ```
+
+## Live tokens for every client
+
+Halogen reports a request's tokens only when it ends. To see them climb live for all your clients (not only the chat),
+let halogen-ui sit in the path: `--proxy-listen 127.0.0.1:18732` opens a transparent TCP proxy to Halogen. Bytes go
+through unchanged in both directions, so authentication, TLS and the API stay exactly where they are; the answers are
+only watched for server-sent events (chat completions, completions, Anthropic messages and OpenAI responses) to count the
+tokens as they go by. Nothing is read from the prompts or stored. It only listens on a loopback address.
+
+Point your reverse proxy at it, **with Halogen as a fallback** so that stopping halogen-ui never cuts your API:
+
+```nginx
+upstream halogen_live {
+    server 127.0.0.1:18732;
+    server 127.0.0.1:18731 backup;   # Halogen itself
+}
+# ... proxy_pass http://halogen_live;
+```
+
+A request that does not stream (no `stream: true`) has no live count: it shows up when it ends, as before.
 
 ## API
 
