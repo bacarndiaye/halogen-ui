@@ -8,7 +8,11 @@
 //!
 //! and serves one page plus `/api/state` (JSON). No prompt or answer text is ever read: the log only carries counts,
 //! so the page can be shared publicly.
+//!
+//! With `--chat` it also serves a chat page (`/chat`) and relays `POST /api/chat` to Halogen's
+//! `/v1/chat/completions`, streaming. Nothing is stored or logged here; the conversation lives in the browser.
 
+mod chat;
 mod json;
 mod parse;
 mod sensors;
@@ -28,6 +32,9 @@ const INDEX: &str = include_str!("../web/index.html");
 const APP_JS: &str = include_str!("../web/app.js");
 const STYLE: &str = include_str!("../web/style.css");
 const FAVICON: &str = include_str!("../web/favicon.svg");
+const CHAT_HTML: &str = include_str!("../web/chat.html");
+const CHAT_JS: &str = include_str!("../web/chat.js");
+const CHAT_CSS: &str = include_str!("../web/chat.css");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const USAGE: &str = "halogen-ui — live web monitor for a Halogen inference server
@@ -40,6 +47,8 @@ USAGE: halogen-ui [options]
                       (HUI_LOG_CMD, default \"docker logs -f -t --tail 3000 halogen\")
   --title TEXT        name shown in the page header    (HUI_TITLE, default Halogen)
   --keep N            finished requests kept in memory (HUI_KEEP, default 500)
+  --chat              also serve a chat page (/chat) that talks to the model (HUI_CHAT=1). Off by default: the monitor
+                      is read-only, the chat lets anyone who can open the page use the model
   -h, --help          this help
 
 The Halogen API key, if the server requires one, is read from HUI_HALOGEN_KEY (never from the command line).
@@ -55,6 +64,9 @@ struct Config {
     log_cmd: String,
     title: String,
     keep: usize,
+    chat: bool,
+    /// Password of the chat, if any (HUI_CHAT_TOKEN, never on the command line).
+    chat_token: Option<String>,
 }
 
 fn config() -> Config {
@@ -71,6 +83,8 @@ fn config() -> Config {
         log_cmd: env("HUI_LOG_CMD", "docker logs -f -t --tail 3000 halogen"),
         title: env("HUI_TITLE", "Halogen"),
         keep: env("HUI_KEEP", "500").parse().unwrap_or(500),
+        chat: matches!(env("HUI_CHAT", "").as_str(), "1" | "true" | "yes" | "on"),
+        chat_token: std::env::var("HUI_CHAT_TOKEN").ok().filter(|v| !v.is_empty()),
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -86,6 +100,7 @@ fn config() -> Config {
             "--log-cmd" => c.log_cmd = val("--log-cmd"),
             "--title" => c.title = val("--title"),
             "--keep" => c.keep = val("--keep").parse().unwrap_or(500),
+            "--chat" => c.chat = true,
             "-V" | "--version" => {
                 println!("halogen-ui {VERSION}");
                 std::process::exit(0)
@@ -229,8 +244,9 @@ fn set_log_error(st: &Shared, e: String) {
 
 // ------------------------------------------------------------------------------------------ Halogen HTTP client --
 
-/// GET `path` on Halogen with a 3 s budget. Plain HTTP only (Halogen listens on HTTP; put TLS in front of it, not here).
-fn http_get(cfg: &Config, path: &str) -> Result<String, String> {
+/// Connect to Halogen: the socket, its `host:port` and the base path of the URL. Plain HTTP only (Halogen listens on
+/// HTTP; put TLS in front of it, not here).
+fn connect(cfg: &Config) -> Result<(TcpStream, String, String), String> {
     let rest = cfg
         .halogen
         .strip_prefix("http://")
@@ -249,7 +265,13 @@ fn http_get(cfg: &Config, path: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())?
         .next()
         .ok_or("no address")?;
-    let mut s = TcpStream::connect_timeout(&sa, Duration::from_secs(2)).map_err(|e| e.to_string())?;
+    let s = TcpStream::connect_timeout(&sa, Duration::from_secs(2)).map_err(|e| e.to_string())?;
+    Ok((s, hostport.to_string(), base))
+}
+
+/// GET `path` on Halogen with a 3 s budget.
+fn http_get(cfg: &Config, path: &str) -> Result<String, String> {
+    let (mut s, hostport, base) = connect(cfg)?;
     s.set_read_timeout(Some(Duration::from_secs(3))).ok();
     s.set_write_timeout(Some(Duration::from_secs(3))).ok();
     let auth = cfg
@@ -657,52 +679,60 @@ fn state_json(cfg: &Config, st: &Shared, all: bool) -> String {
 
 // ------------------------------------------------------------------------------------------------- HTTP server --
 
-fn respond(stream: &mut TcpStream, code: &str, ctype: &str, body: &[u8], cache: bool) {
-    let csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; \
+/// Response head without the body framing: the caller adds `Content-Length`, or streams until the connection closes.
+fn response_head(code: &str, ctype: &str, cache: bool, extra: &str) -> String {
+    let csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; \
                base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
     let cache_hdr = if cache { "public, max-age=300" } else { "no-store" };
-    let head = format!(
-        "HTTP/1.1 {code}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: {cache_hdr}\r\n\
+    format!(
+        "HTTP/1.1 {code}\r\nContent-Type: {ctype}\r\nCache-Control: {cache_hdr}\r\n{extra}\
          Content-Security-Policy: {csp}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n\
-         X-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
+         X-Frame-Options: DENY\r\nConnection: close\r\n"
+    )
+}
+
+fn respond(stream: &mut TcpStream, code: &str, ctype: &str, body: &[u8], cache: bool) {
+    let head = response_head(code, ctype, cache, &format!("Content-Length: {}\r\n", body.len()));
     let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(b"\r\n");
     let _ = stream.write_all(body);
 }
 
 fn handle(mut stream: TcpStream, cfg: &Config, st: &Shared) {
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
-    let mut buf = [0u8; 8192];
-    let mut len = 0;
-    while len < buf.len() {
-        match stream.read(&mut buf[len..]) {
-            Ok(0) | Err(_) => break,
-            Ok(k) => {
-                len += k;
-                if buf[..len].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
+    let Some(head) = chat::read_head(&mut stream) else {
+        return;
+    };
+    let (path, query) = head.target.split_once('?').unwrap_or((head.target.as_str(), ""));
+    if cfg.chat && path == "/api/chat" && head.method == "POST" {
+        return chat::handle(stream, cfg, &head);
+    }
+    if cfg.chat && path == "/api/chat-login" {
+        match head.method.as_str() {
+            "POST" => return chat::login(stream, cfg, &head),
+            "GET" => return chat::auth_state(stream, cfg, &head),
+            _ => {}
         }
     }
-    let req = String::from_utf8_lossy(&buf[..len]);
-    let mut first = req.lines().next().unwrap_or("").split_whitespace();
-    let (method, target) = (first.next().unwrap_or(""), first.next().unwrap_or("/"));
-    if method != "GET" && method != "HEAD" {
-        return respond(
-            &mut stream,
-            "405 Method Not Allowed",
-            "text/plain",
-            b"read-only\n",
-            false,
-        );
+    if head.method != "GET" && head.method != "HEAD" {
+        let msg: &[u8] = if cfg.chat {
+            b"read-only, except the chat\n"
+        } else {
+            b"read-only\n"
+        };
+        return respond(&mut stream, "405 Method Not Allowed", "text/plain", msg, false);
     }
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
     match path {
         "/" | "/index.html" => {
-            let page = INDEX.replace("{{TITLE}}", &json::html_escape(&cfg.title));
+            let link = if cfg.chat {
+                r#"<a class="btn" href="chat">Chat</a>"#
+            } else {
+                ""
+            };
+            let page = INDEX
+                .replace("{{TITLE}}", &json::html_escape(&cfg.title))
+                .replace("{{CHAT_LINK}}", link);
             respond(
                 &mut stream,
                 "200 OK",
@@ -711,6 +741,30 @@ fn handle(mut stream: TcpStream, cfg: &Config, st: &Shared) {
                 false,
             )
         }
+        "/chat" | "/chat.html" if cfg.chat => {
+            let page = CHAT_HTML.replace("{{TITLE}}", &json::html_escape(&cfg.title));
+            respond(
+                &mut stream,
+                "200 OK",
+                "text/html; charset=utf-8",
+                page.as_bytes(),
+                false,
+            )
+        }
+        "/chat.js" if cfg.chat => respond(
+            &mut stream,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            CHAT_JS.as_bytes(),
+            true,
+        ),
+        "/chat.css" if cfg.chat => respond(
+            &mut stream,
+            "200 OK",
+            "text/css; charset=utf-8",
+            CHAT_CSS.as_bytes(),
+            true,
+        ),
         "/app.js" => respond(
             &mut stream,
             "200 OK",

@@ -15,8 +15,12 @@ Environment=HUI_HALOGEN=http://127.0.0.1:8731
 # The whole log since Halogen started: full request history and the start time in the page.
 Environment="HUI_LOG_CMD=journalctl -u halogen.service -f -o short-unix --since \"$(systemctl show -p ActiveEnterTimestamp --value halogen.service)\""
 Environment=HUI_TITLE=Halogen
+# Uncomment to also serve the chat page (/chat): anyone who can open the page can then use the model.
+#Environment=HUI_CHAT=1
+# Password of the chat (put it in the EnvironmentFile below rather than here):
+#   HUI_CHAT_TOKEN=…
 # Halogen API key, if the server requires one:
-# EnvironmentFile=-/etc/halogen-ui.env      (HUI_HALOGEN_KEY=…, mode 600)
+# EnvironmentFile=-/etc/halogen-ui.env      (HUI_HALOGEN_KEY=…, HUI_CHAT_TOKEN=…, mode 600)
 Restart=always
 RestartSec=5
 

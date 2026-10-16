@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>{{TITLE}} · Chat</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="chat.css">
+<script src="chat.js" defer></script>
+</head>
+<body class="chat-page">
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true"></span><span>{{TITLE}}</span><span class="tag">Chat</span></div>
+  <div class="top-right">
+    <a class="btn" href="./">Monitor</a>
+    <span class="pill" id="pill"><span class="dot"></span><span id="pill-txt">…</span></span>
+    <button class="icon-btn" id="theme" type="button" aria-label="Switch light / dark theme" title="Theme">◐</button>
+  </div>
+</header>
+
+<main class="chat" id="chat">
+  <div class="hero" id="hero">
+    <h1>Ask anything</h1>
+    <p class="sub" id="hero-sub">Talk to the model running on this server. Nothing leaves it.</p>
+  </div>
+  <div class="thread" id="thread" aria-live="polite"></div>
+</main>
+
+<div class="lock" id="lock" role="dialog" aria-labelledby="lock-title" hidden>
+  <div class="lock-card">
+    <h2 id="lock-title">Password</h2>
+    <p class="sub">This chat is protected. The monitor stays open to everyone.</p>
+    <input id="lock-pw" type="password" autocomplete="current-password" aria-label="Password">
+    <p class="lock-err" id="lock-err" hidden></p>
+    <button type="button" class="btn" id="lock-go">Unlock</button>
+  </div>
+</div>
+
+<form class="composer-wrap" id="form" autocomplete="off">
+  <div class="atts" id="atts" hidden></div>
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="Ask anything…" aria-label="Message" autofocus></textarea>
+    <div class="tools">
+      <button type="button" class="tool" id="attach" title="Attach images or text files" aria-label="Attach files">
+        <svg viewBox="0 0 24 24"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
+      </button>
+      <button type="button" class="tool" id="new" title="New chat" aria-label="New chat">
+        <svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-12.4 7.4L3 20.5l1.6-5.2A8.5 8.5 0 1 1 21 11.5z"/><path d="M12 8v6M9 11h6"/></svg>
+      </button>
+      <button type="button" class="tool" id="export" title="Download the conversation" aria-label="Download the conversation">
+        <svg viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M4 20h16"/></svg>
+      </button>
+      <button type="button" class="tool" id="cog" title="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+      <span class="spacer"></span>
+      <span class="hint">Shift+Enter: new line</span>
+      <button type="submit" class="send" id="send" title="Send" aria-label="Send">
+        <svg class="i-send" viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        <svg class="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </button>
+    </div>
+  </div>
+  <section class="settings" id="settings" hidden>
+    <label class="field wide">System prompt
+      <textarea id="s-system" rows="3" placeholder="Optional instructions given before the conversation"></textarea>
+    </label>
+    <label class="field">Thinking
+      <select id="s-think">
+        <option value="">Server default</option>
+        <option value="off">Off</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+        <option value="max">Max</option>
+      </select>
+    </label>
+    <label class="field">Temperature
+      <input id="s-temp" type="number" min="0" max="2" step="0.1" placeholder="server default">
+    </label>
+    <label class="field">Max answer tokens
+      <input id="s-max" type="number" min="1" step="1" placeholder="server default">
+    </label>
+    <p class="sub wide">Saved in this browser only. The conversation is never stored on the server.</p>
+  </section>
+  <input type="file" id="file" multiple accept="image/*,.txt,.md,.json,.csv,.log,.py,.js,.ts,.rs,.go,.c,.h,.cpp,.java,.sh,.html,.css,.yaml,.yml,.toml,.xml,.sql,text/*" hidden>
+</form>
+</body>
+</html>
